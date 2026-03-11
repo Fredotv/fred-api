@@ -9,7 +9,7 @@ CORS(app)
 
 @app.route('/')
 def index():
-    return "API FredVertical (Source: PA24) active."
+    return "API FredVertical (Source PA24) active."
 
 @app.route('/get_car', methods=['GET'])
 def get_car():
@@ -18,11 +18,11 @@ def get_car():
     if not query:
         return jsonify({"success": False, "error": "Saisie vide"}), 400
 
-    # Source : Pièces Auto 24 (Plus stable pour le scraping)
+    # Utilisation de PiecesAuto24 qui est plus ouvert au SIV/VIN
     url = f"https://www.piecesauto24.com/rechercher?keyword={query}"
     
     try:
-        # On utilise cloudscraper pour simuler un vrai visiteur
+        # On simule un navigateur très récent
         scraper = cloudscraper.create_scraper(
             browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
         )
@@ -30,38 +30,33 @@ def get_car():
         response = scraper.get(url, timeout=15)
         
         if response.status_code != 200:
-            return jsonify({"success": False, "error": f"Serveur distant indisponible ({response.status_code})"}), 200
+            return jsonify({"success": False, "error": f"Source indisponible ({response.status_code})"}), 200
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Sur ce site, le nom du véhicule est souvent dans le titre ou un titre H1
+        # Sur PA24, le nom du véhicule est dans le titre de la page
         title_tag = soup.find('title')
-        h1_tag = soup.find('h1')
-        
-        # On essaie d'extraire le nom propre
-        raw_name = ""
-        if title_tag:
-            raw_name = title_tag.text.split('|')[0].strip()
-        
-        # Nettoyage pour ne pas afficher "Recherche" ou des mots inutiles
-        if "recherche" in raw_name.lower() or len(raw_name) < 5:
-            if h1_tag:
-                raw_name = h1_tag.text.strip()
+        if not title_tag:
+             return jsonify({"success": False, "error": "Données illisibles"}), 200
 
-        # Si toujours rien de cohérent
-        if not raw_name or "recherche" in raw_name.lower():
-            return jsonify({"success": False, "error": "Véhicule non trouvé"}), 200
+        full_title = title_tag.text
+        
+        # Si on est sur une page de résultats, le titre contient le nom de la voiture
+        # On nettoie les textes inutiles
+        car_name = full_title.split('|')[0].replace("Pièces auto pour", "").replace("Catalogues de pièces détachées pour", "").strip()
+
+        if "recherche" in car_name.lower() or len(car_name) < 5:
+            return jsonify({"success": False, "error": "Véhicule non trouvé dans cette base"}), 200
 
         return jsonify({
             "success": True,
-            "name": raw_name.replace("Pièces auto pour ", ""),
+            "name": car_name,
             "plate": query,
-            "type": "VIN" if len(query) == 17 else "PLAQUE",
-            "year": 2018
+            "source": "PA24 Database"
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": "Erreur de connexion"}), 200
+        return jsonify({"success": False, "error": "Erreur de connexion réseau"}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
