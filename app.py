@@ -9,54 +9,57 @@ CORS(app)
 
 @app.route('/')
 def index():
-    return "API FredVertical Opérationnelle. Utilisez /get_car?plate=XX123YY"
+    return "API FredVertical SIV/VIN active."
 
 @app.route('/get_car', methods=['GET'])
 def get_car():
-    plate = request.args.get('plate', '').replace("-", "").replace(" ", "").upper()
+    # Nettoyage de l'entrée (Plaque ou VIN)
+    query = request.args.get('plate', '').replace("-", "").replace(" ", "").upper()
     
-    if not plate:
-        return jsonify({"success": False, "error": "Plaque manquante"}), 400
+    if not query:
+        return jsonify({"success": False, "error": "Saisie vide"}), 400
 
-    # On tente d'abord Oscaro, si ça échoue on pourra ajouter d'autres sources
-    url = f"https://www.oscaro.com/catalog/vehicles/find?plate={plate}"
+    # CHOIX DE LA PORTE : Si 17 caractères = VIN, sinon = PLAQUE
+    if len(query) == 17:
+        url = f"https://www.oscaro.com/fr/search?vin={query}"
+        type_search = "VIN"
+    else:
+        url = f"https://www.oscaro.com/fr/search?plate={query}"
+        type_search = "PLAQUE"
     
     try:
-        # Configuration avancée du scraper pour éviter le blocage
         scraper = cloudscraper.create_scraper(
-            delay=10, 
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
-            }
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
         )
         
         response = scraper.get(url, timeout=15)
         
+        # Si Oscaro redirige ou ne trouve pas
         if response.status_code != 200:
-            # Si Oscaro bloque, on renvoie une erreur explicite pour le debug
-            return jsonify({"success": False, "error": f"Source bloquée (Code {response.status_code})"}), 200
+            return jsonify({"success": False, "error": f"Erreur Oscaro {response.status_code}"}), 200
 
         soup = BeautifulSoup(response.text, 'html.parser')
+        title_tag = soup.find('title')
         
-        # Extraction du nom via la balise Title ou Meta
-        title = soup.find('title').text if soup.find('title') else ""
-        
-        if "Oscaro" in title and "Pièces" not in title:
-            return jsonify({"success": False, "error": "Véhicule non trouvé"}), 200
+        if not title_tag or "Oscaro.com" not in title_tag.text:
+            return jsonify({"success": False, "error": f"{type_search} non reconnu par Oscaro"}), 200
 
-        car_name = title.replace("Pièces auto pour ", "").split("|")[0].strip()
+        car_name = title_tag.text.replace("Pièces auto pour ", "").split("|")[0].strip()
+
+        # Si le titre est juste "Oscaro", c'est un échec de recherche
+        if car_name.lower() == "oscaro" or len(car_name) < 5:
+             return jsonify({"success": False, "error": f"{type_search} introuvable"}), 200
 
         return jsonify({
             "success": True,
             "name": car_name,
-            "plate": plate,
+            "plate": query,
+            "type": type_search,
             "year": 2018
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Erreur technique"}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
