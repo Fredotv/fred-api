@@ -1,67 +1,58 @@
 import os
+import cloudscraper
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import cloudscraper
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CORS(app)
 
+@app.route('/')
+def index():
+    return "API FredVertical Opérationnelle. Utilisez /get_car?plate=XX123YY"
+
 @app.route('/get_car', methods=['GET'])
 def get_car():
-    # Nettoyage de la plaque
-    raw_query = request.args.get('plate', '').strip()
-    query = raw_query.replace("-", "").replace(" ", "").upper()
+    plate = request.args.get('plate', '').replace("-", "").replace(" ", "").upper()
     
-    if not query:
-        return jsonify({"success": False, "error": "Plaque vide"}), 400
+    if not plate:
+        return jsonify({"success": False, "error": "Plaque manquante"}), 400
 
-    # URL Oscaro
-    if len(query) == 17:
-        url = f"https://www.oscaro.com/catalog/vehicles/find?vin={query}"
-    else:
-        url = f"https://www.oscaro.com/catalog/vehicles/find?plate={query}"
+    # On tente d'abord Oscaro, si ça échoue on pourra ajouter d'autres sources
+    url = f"https://www.oscaro.com/catalog/vehicles/find?plate={plate}"
     
     try:
-        # Configuration d'un scraper plus "humain"
+        # Configuration avancée du scraper pour éviter le blocage
         scraper = cloudscraper.create_scraper(
+            delay=10, 
             browser={
                 'browser': 'chrome',
                 'platform': 'windows',
-                'desktop': True
+                'mobile': False
             }
         )
         
-        # On fait la requête
-        response = scraper.get(url, timeout=20)
+        response = scraper.get(url, timeout=15)
         
-        # Si Oscaro nous bloque (403), on essaie une autre méthode
         if response.status_code != 200:
-             return jsonify({"success": False, "error": f"Oscaro bloque (Code {response.status_code})"}), 403
+            # Si Oscaro bloque, on renvoie une erreur explicite pour le debug
+            return jsonify({"success": False, "error": f"Source bloquée (Code {response.status_code})"}), 200
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # --- NOUVELLE LOGIQUE D'EXTRACTION ---
-        # 1. On cherche d'abord dans les balises meta (plus fiable)
-        meta_desc = soup.find("meta", property="og:title")
-        if meta_desc:
-            car_name = meta_desc["content"]
-        else:
-            car_name = soup.find('title').text if soup.find('title') else ""
+        # Extraction du nom via la balise Title ou Meta
+        title = soup.find('title').text if soup.find('title') else ""
+        
+        if "Oscaro" in title and "Pièces" not in title:
+            return jsonify({"success": False, "error": "Véhicule non trouvé"}), 200
 
-        # Nettoyage strict
-        car_name = car_name.replace("Pièces auto pour ", "").split("|")[0].split(" - Oscaro")[0].strip()
-
-        # Si le nom contient encore "Oscaro" ou est trop court, c'est un échec
-        if "Oscaro" in car_name or len(car_name) < 5:
-            return jsonify({"success": False, "error": "Véhicule non trouvé"}), 404
+        car_name = title.replace("Pièces auto pour ", "").split("|")[0].strip()
 
         return jsonify({
             "success": True,
             "name": car_name,
-            "plate": raw_query,
-            "year": 2017, # Valeur par défaut
-            "status": "Identification OK"
+            "plate": plate,
+            "year": 2018
         })
 
     except Exception as e:
